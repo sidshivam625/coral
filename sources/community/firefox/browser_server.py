@@ -5,6 +5,7 @@ import json
 import sqlite3
 import shutil
 import tempfile
+import time
 from datetime import datetime, timezone
 from urllib.parse import urlparse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -148,7 +149,16 @@ def extract_extensions(profile_path):
         print(f"Error parsing extensions: {e}")
     return results
 
-ACTIVE_PROFILE_PATH = resolve_active_profile()
+_cached_profile = None
+_cache_time = 0
+
+def get_active_profile():
+    global _cached_profile, _cache_time
+    now = time.time()
+    if not _cached_profile or (now - _cache_time > 60):
+        _cached_profile = resolve_active_profile()
+        _cache_time = now
+    return _cached_profile
 
 class BrowserAPIHandler(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -157,7 +167,7 @@ class BrowserAPIHandler(BaseHTTPRequestHandler):
         
         if len(path_parts) == 2 and path_parts[0] == "firefox":
             data_type = path_parts[1]
-            profile_path = ACTIVE_PROFILE_PATH
+            profile_path = get_active_profile()
             
             if not profile_path:
                 self.send_success({"data": []})
