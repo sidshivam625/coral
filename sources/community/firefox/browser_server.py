@@ -83,6 +83,7 @@ def query_sqlite(db_name, profile_path, query):
             shutil.copy2(src, temp_path + ext)
             
     results = []
+    conn = None
     try:
         conn = sqlite3.connect(temp_path)
         conn.row_factory = sqlite3.Row
@@ -90,10 +91,11 @@ def query_sqlite(db_name, profile_path, query):
         cursor.execute(query)
         for row in cursor.fetchall():
             results.append(dict(row))
-        conn.close()
     except Exception as e:
         print(f"SQLite Error reading {db_name}: {e}")
     finally:
+        if conn:
+            conn.close()
         shutil.rmtree(temp_dir)
     return results
 
@@ -146,6 +148,8 @@ def extract_extensions(profile_path):
         print(f"Error parsing extensions: {e}")
     return results
 
+ACTIVE_PROFILE_PATH = resolve_active_profile()
+
 class BrowserAPIHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         parsed_path = urlparse(self.path).path
@@ -153,7 +157,7 @@ class BrowserAPIHandler(BaseHTTPRequestHandler):
         
         if len(path_parts) == 2 and path_parts[0] == "firefox":
             data_type = path_parts[1]
-            profile_path = resolve_active_profile()
+            profile_path = ACTIVE_PROFILE_PATH
             
             if not profile_path:
                 self.send_success({"data": []})
