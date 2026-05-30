@@ -5,6 +5,8 @@ backend: http
 description: >-
   Query local bookmarks, history, extensions, and top sites for Mozilla Firefox.
 base_url: "http://127.0.0.1:8766"
+headers:
+  Authorization: "Bearer ${FIREFOX_SERVER_TOKEN}"
 test_queries:
   - SELECT id, title FROM firefox.bookmarks LIMIT 1
 
@@ -20,7 +22,7 @@ tables:
       - { name: title, type: Utf8, nullable: true }
       - { name: url, type: Utf8, nullable: true }
       - { name: type, type: Utf8, nullable: false }
-      - { name: date_added, type: Utf8, nullable: true }
+      - { name: date_added, type: Timestamp, nullable: true, format_timestamp: "%Y-%m-%dT%H:%M:%S%z" }
 
   - name: history
     description: "Lists Firefox browsing history records."
@@ -33,7 +35,7 @@ tables:
       - { name: url, type: Utf8, nullable: false }
       - { name: title, type: Utf8, nullable: true }
       - { name: visit_count, type: Int64, nullable: false }
-      - { name: last_visit_date, type: Utf8, nullable: true }
+      - { name: last_visit_date, type: Timestamp, nullable: true, format_timestamp: "%Y-%m-%dT%H:%M:%S%z" }
 
   - name: extensions
     description: "Lists installed Firefox extensions."
