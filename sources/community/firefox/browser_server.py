@@ -149,13 +149,14 @@ def extract_extensions(profile_path):
         print(f"Error parsing extensions: {e}")
     return results
 
-_cached_profile = None
-_cache_time = 0
+_UNSET = object()
+_cached_profile = _UNSET
+_cache_time = 0.0
 
 def get_active_profile():
     global _cached_profile, _cache_time
     now = time.time()
-    if not _cached_profile or (now - _cache_time > 60):
+    if _cached_profile is _UNSET or (now - _cache_time > 60):
         _cached_profile = resolve_active_profile()
         _cache_time = now
     return _cached_profile
