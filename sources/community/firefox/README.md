@@ -31,9 +31,9 @@ computer.
   smuggling.
 * **Security headers:** All responses include `Cache-Control: no-store` and
   `X-Content-Type-Options: nosniff`.
-* **Accurate profile resolution:** Reads Firefox's own `installs.ini` /
-  `profiles.ini` metadata to find the correct default profile, instead of
-  guessing by file-modification time.
+* **Accurate profile resolution:** Reads Firefox's `profiles.ini` metadata to
+  find the correct install or default profile, instead of guessing by
+  file-modification time.
 * **Explicit profile override:** Set `FIREFOX_PROFILE_PATH` to pin the server
   to one specific profile directory.
 * **Safe SQLite extraction:** Copies `places.sqlite` together with its WAL and

@@ -56,43 +56,13 @@ def get_base_path():
 
 
 def _resolve_from_ini(base_path: str):
-    """Parse Firefox's profiles.ini (and installs.ini) to find the true default
-    profile, mirroring the logic Firefox itself uses.
+    """Parse Firefox's profiles.ini to find the default profile.
 
     Resolution order:
-      1. installs.ini  – per-install Default key (most accurate on Win/macOS)
-      2. profiles.ini  – [Profile…] section with Default=1
-            3. None          – caller must require FIREFOX_PROFILE_PATH
+      1. [Install...] sections with a Default key
+      2. [Profile...] section with Default=1
+      3. None – caller must require FIREFOX_PROFILE_PATH
     """
-    # ---- installs.ini (present in Firefox 67+, Win/macOS) ----
-    installs_ini = os.path.join(base_path, "installs.ini")
-    if os.path.exists(installs_ini):
-        cfg = configparser.ConfigParser()
-        try:
-            cfg.read(installs_ini, encoding="utf-8")
-        except Exception as e:
-            print(f"Warning: could not parse installs.ini: {e}")
-        else:
-            for section in cfg.sections():
-                default_rel = cfg.get(section, "Default", fallback=None)
-                if default_rel:
-                    # Value can be relative (to base_path) or absolute
-                    candidate = (
-                        default_rel
-                        if os.path.isabs(default_rel)
-                        else os.path.join(base_path, default_rel)
-                    )
-                    candidate = os.path.normpath(candidate)
-                    if os.path.exists(os.path.join(candidate, "places.sqlite")):
-                        print(f"Resolved profile via installs.ini [{section}]: {candidate}")
-                        return candidate
-                    else:
-                        print(
-                            f"installs.ini [{section}] Default={default_rel!r} "
-                            f"does not contain places.sqlite – skipping"
-                        )
-
-    # ---- profiles.ini ----
     profiles_ini = os.path.join(base_path, "profiles.ini")
     if os.path.exists(profiles_ini):
         cfg = configparser.ConfigParser()
@@ -101,7 +71,7 @@ def _resolve_from_ini(base_path: str):
         except Exception as e:
             print(f"Warning: could not parse profiles.ini: {e}")
         else:
-            # First check [Install...] sections (modern per-install defaults)
+            # First check [Install...] sections (modern per-install defaults).
             for section in cfg.sections():
                 if section.startswith("Install"):
                     default_path = cfg.get(section, "Default", fallback=None)
@@ -115,8 +85,12 @@ def _resolve_from_ini(base_path: str):
                         if os.path.exists(os.path.join(candidate, "places.sqlite")):
                             print(f"Resolved profile via profiles.ini [{section}]: {candidate}")
                             return candidate
+                        print(
+                            f"profiles.ini [{section}] Default={default_path!r} "
+                            f"does not contain places.sqlite – skipping"
+                        )
 
-            # Fallback to [Profile...] with Default=1 (older format)
+            # Fallback to [Profile...] with Default=1 (older format).
             for section in cfg.sections():
                 if not section.lower().startswith("profile"):
                     continue
@@ -135,9 +109,12 @@ def _resolve_from_ini(base_path: str):
                 if os.path.exists(os.path.join(candidate, "places.sqlite")):
                     print(f"Resolved profile via profiles.ini [{section}]: {candidate}")
                     return candidate
+                print(
+                    f"profiles.ini [{section}] Path={path_val!r} does not contain places.sqlite – skipping"
+                )
 
     print(
-        "Could not resolve the Firefox default profile from installs.ini or profiles.ini. "
+        "Could not resolve the Firefox default profile from profiles.ini. "
         "Set FIREFOX_PROFILE_PATH to a profile directory containing places.sqlite."
     )
     return None
@@ -160,7 +137,7 @@ def resolve_active_profile():
         print(f"Firefox base path not found: {base_path}")
         return None
 
-    # Try profiles.ini / installs.ini first; otherwise require an explicit override.
+    # Try profiles.ini first; otherwise require an explicit override.
     return _resolve_from_ini(base_path)
 
 # ---------------------------------------------------------------------------
