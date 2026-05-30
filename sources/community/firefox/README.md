@@ -23,7 +23,7 @@ computer.
 ## Features
 
 * **Shared bearer token:** Every request must carry `Authorization: Bearer <token>`.
-  The token is generated at startup (or read from `FIREFOX_SERVER_TOKEN`) and
+  The token is generated at startup (or read from `FIREFOX_API_KEY`) and
   must be exported before running `coral source add`.
 * **Host, origin, and fetch-metadata checks:** Requests with an unexpected
   `Host`, `Origin`, or `Referer` header, or a cross-site `Sec-Fetch-Site`

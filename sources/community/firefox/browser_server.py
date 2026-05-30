@@ -14,11 +14,11 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 # ---------------------------------------------------------------------------
 # Auth token – read from env or generate a fresh one at startup.
-# The same value must be exported as FIREFOX_SERVER_TOKEN before running
+# The same value must be exported as FIREFOX_API_KEY before running
 # `coral source add firefox` so the manifest can forward it in the
 # Authorization header.
 # ---------------------------------------------------------------------------
-_SERVER_TOKEN: str = os.environ.get("FIREFOX_SERVER_TOKEN") or secrets.token_hex(32)
+_SERVER_TOKEN: str = os.environ.get("FIREFOX_API_KEY") or secrets.token_hex(32)
 
 PORT = 8766
 _HOST_HEADER = f"127.0.0.1:{PORT}"
@@ -101,6 +101,22 @@ def _resolve_from_ini(base_path: str):
         except Exception as e:
             print(f"Warning: could not parse profiles.ini: {e}")
         else:
+            # First check [Install...] sections (modern per-install defaults)
+            for section in cfg.sections():
+                if section.startswith("Install"):
+                    default_path = cfg.get(section, "Default", fallback=None)
+                    if default_path:
+                        candidate = (
+                            default_path
+                            if os.path.isabs(default_path)
+                            else os.path.join(base_path, default_path)
+                        )
+                        candidate = os.path.normpath(candidate)
+                        if os.path.exists(os.path.join(candidate, "places.sqlite")):
+                            print(f"Resolved profile via profiles.ini [{section}]: {candidate}")
+                            return candidate
+
+            # Fallback to [Profile...] with Default=1 (older format)
             for section in cfg.sections():
                 if not section.lower().startswith("profile"):
                     continue
@@ -145,11 +161,7 @@ def resolve_active_profile():
         return None
 
     # Try profiles.ini / installs.ini first; otherwise require an explicit override.
-    profile = _resolve_from_ini(base_path)
-    if profile:
-        return profile
-
-    return _resolve_by_mtime(base_path)
+    return _resolve_from_ini(base_path)
 
 # ---------------------------------------------------------------------------
 # SQLite helpers
@@ -390,17 +402,17 @@ class BrowserAPIHandler(BaseHTTPRequestHandler):
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    if "FIREFOX_SERVER_TOKEN" not in os.environ:
+    if "FIREFOX_API_KEY" not in os.environ:
         print("=" * 60)
-        print("No FIREFOX_SERVER_TOKEN set. Generated a new token:")
+        print("No FIREFOX_API_KEY set. Generated a new token:")
         print(f"  {_SERVER_TOKEN}")
         print()
         print("Export this value before running `coral source add firefox`:")
-        print(f"  export FIREFOX_SERVER_TOKEN={_SERVER_TOKEN}   # macOS/Linux")
-        print(f"  $env:FIREFOX_SERVER_TOKEN=\"{_SERVER_TOKEN}\"  # PowerShell")
+        print(f"  export FIREFOX_API_KEY={_SERVER_TOKEN}   # macOS/Linux")
+        print(f"  $env:FIREFOX_API_KEY=\"{_SERVER_TOKEN}\"  # PowerShell")
         print("=" * 60)
     else:
-        print("Using FIREFOX_SERVER_TOKEN from environment.")
+        print("Using FIREFOX_API_KEY from environment.")
 
     server = ThreadingHTTPServer(("127.0.0.1", PORT), BrowserAPIHandler)
     print(f"Starting Firefox local server on http://127.0.0.1:{PORT}")
