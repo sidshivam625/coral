@@ -4,9 +4,21 @@ dsl_version: 3
 backend: http
 description: >-
   Query local bookmarks, history, extensions, and top sites for Mozilla Firefox.
+inputs:
+  FIREFOX_API_KEY:
+    kind: secret
+    hint: |
+      Bearer token for the local Firefox server. Set the FIREFOX_API_KEY
+      environment variable before starting browser_server.py to define your own
+      token, or copy the token printed to the console when the server starts
+      without that variable set.
 base_url: "http://127.0.0.1:8766"
-headers:
-  Authorization: "Bearer ${FIREFOX_SERVER_TOKEN}"
+auth:
+  type: HeaderAuth
+  headers:
+    - name: Authorization
+      from: template
+      template: Bearer {{input.FIREFOX_API_KEY}}
 test_queries:
   - SELECT id, title FROM firefox.bookmarks LIMIT 1
 

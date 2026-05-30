@@ -97,12 +97,12 @@ On first run the server prints a generated bearer token:
 
 ```
 ============================================================
-No FIREFOX_SERVER_TOKEN set. Generated a new token:
-  a3f8c1d2e4b5...  (64 hex characters)
+No FIREFOX_API_KEY set. Generated a new token:
+  a3f8c1d2e4b5...  (32 hex characters)
 
-Export this value before running `coral source add firefox`:
-  export FIREFOX_SERVER_TOKEN=a3f8c1d2e4b5...   # macOS/Linux
-  $env:FIREFOX_SERVER_TOKEN="a3f8c1d2e4b5..."   # PowerShell
+Export this value before running `coral source add`:
+  export FIREFOX_API_KEY=a3f8c1d2e4b5...   # macOS/Linux
+  $env:FIREFOX_API_KEY="a3f8c1d2e4b5..."   # PowerShell
 ============================================================
 Starting Firefox local server on http://127.0.0.1:8766
 ```
@@ -116,24 +116,24 @@ In a **second terminal**, export the token printed in Step 2 so that
 
 ```bash
 # macOS / Linux
-export FIREFOX_SERVER_TOKEN=a3f8c1d2e4b5...
+export FIREFOX_API_KEY=a3f8c1d2e4b5...
 
 # Windows PowerShell
-$env:FIREFOX_SERVER_TOKEN="a3f8c1d2e4b5..."
+$env:FIREFOX_API_KEY="a3f8c1d2e4b5..."
 ```
 
 > **Tip:** To avoid retyping the token on every server restart, set
-> `FIREFOX_SERVER_TOKEN` to a fixed value in your shell profile (e.g.
+> `FIREFOX_API_KEY` to a fixed value in your shell profile (e.g.
 > `~/.zshrc`) **and** export it before starting the server:
 > ```bash
-> export FIREFOX_SERVER_TOKEN="my-fixed-secret-value"
+> export FIREFOX_API_KEY="my-fixed-secret-value"
 > python sources/community/firefox/browser_server.py
 > ```
 
 ### Step 4 – Add the source to Coral
 
 ```bash
-coral source add firefox
+coral source add --file ./sources/community/firefox/manifest.yaml
 ```
 
 ### Step 5 – Verify the source
@@ -150,7 +150,7 @@ Expected output (abridged):
 
 If the command reports an error, check that:
 - The server is still running (Step 2 terminal).
-- `FIREFOX_SERVER_TOKEN` is exported in **this** terminal and matches the
+- `FIREFOX_API_KEY` is exported in **this** terminal and matches the
   value printed by the server (Step 3).
 - The profile path contains `places.sqlite`.
 
@@ -190,7 +190,7 @@ Shutting down server.
 
 | Variable | Description |
 |----------|-------------|
-| `FIREFOX_SERVER_TOKEN` | Bearer token for the local HTTP server. If unset, a random token is generated at startup and printed to stdout. |
+| `FIREFOX_API_KEY` | Bearer token for the local HTTP server. If unset, a random token is generated at startup and printed to stdout. |
 | `FIREFOX_PROFILE_PATH` | Full path to a specific Firefox profile directory (must contain `places.sqlite`). Overrides automatic profile detection. |
 | `FIREFOX_PROFILES_PATH` | Full path to the Firefox `Profiles` root directory. Overrides the platform default used by the `profiles.ini` scanner. |
 

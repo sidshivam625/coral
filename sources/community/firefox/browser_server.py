@@ -33,7 +33,7 @@ def convert_prtime(pr_time):
         return None
     try:
         dt = datetime.fromtimestamp(int(pr_time) / 1000000.0, tz=timezone.utc)
-        return dt.isoformat()
+        return dt.strftime("%Y-%m-%dT%H:%M:%S%z")
     except Exception:
         return str(pr_time)
 
