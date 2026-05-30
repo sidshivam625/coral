@@ -1,0 +1,58 @@
+name: firefox
+version: 0.1.0
+dsl_version: 3
+backend: http
+description: >-
+  Query local bookmarks, history, extensions, and top sites for Mozilla Firefox.
+base_url: "http://127.0.0.1:8766"
+test_queries:
+  - SELECT id, title FROM firefox.bookmarks LIMIT 1
+
+tables:
+  - name: bookmarks
+    description: "Lists Firefox bookmarks and folders."
+    request: { method: GET, path: /firefox/bookmarks }
+    response: { rows_path: [data] }
+    pagination: { mode: none }
+    fetch_limit_default: 500
+    columns:
+      - { name: id, type: Int64, nullable: false }
+      - { name: title, type: Utf8, nullable: true }
+      - { name: url, type: Utf8, nullable: true }
+      - { name: type, type: Utf8, nullable: false }
+      - { name: date_added, type: Utf8, nullable: true }
+
+  - name: history
+    description: "Lists Firefox browsing history records."
+    request: { method: GET, path: /firefox/history }
+    response: { rows_path: [data] }
+    pagination: { mode: none }
+    fetch_limit_default: 500
+    columns:
+      - { name: id, type: Int64, nullable: false }
+      - { name: url, type: Utf8, nullable: false }
+      - { name: title, type: Utf8, nullable: true }
+      - { name: visit_count, type: Int64, nullable: false }
+      - { name: last_visit_date, type: Utf8, nullable: true }
+
+  - name: extensions
+    description: "Lists installed Firefox extensions."
+    request: { method: GET, path: /firefox/extensions }
+    response: { rows_path: [data] }
+    pagination: { mode: none }
+    fetch_limit_default: 500
+    columns:
+      - { name: id, type: Utf8, nullable: false }
+      - { name: name, type: Utf8, nullable: true }
+      - { name: version, type: Utf8, nullable: true }
+
+  - name: top_sites
+    description: "Lists the most frequently visited Firefox websites ranked by frecency."
+    request: { method: GET, path: /firefox/top_sites }
+    response: { rows_path: [data] }
+    pagination: { mode: none }
+    fetch_limit_default: 500
+    columns:
+      - { name: url_rank, type: Int64, nullable: false }
+      - { name: url, type: Utf8, nullable: false }
+      - { name: title, type: Utf8, nullable: true }
