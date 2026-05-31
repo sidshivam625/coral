@@ -253,7 +253,7 @@ ORDER BY last_visit_date DESC;
 -- All bookmarks added in the last 30 days
 SELECT title, url, date_added
 FROM firefox.bookmarks
-WHERE date_added >= datetime('now', '-30 days')
+WHERE date_added >= NOW() - INTERVAL '30 days'
 ORDER BY date_added DESC;
 ```
 
