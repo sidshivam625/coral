@@ -244,6 +244,89 @@ WHERE date_added >= datetime('now', '-30 days')
 ORDER BY date_added DESC;
 ```
 
+### Example Queries and Outputs
+
+Here is evidence of the source successfully querying and truncating real local data:
+
+**1. Latest Bookmarks (Truncated)**
+To see your most recently added bookmarks first, sort by `date_added` in descending (`DESC`) order:
+
+```powershell
+coral sql "SELECT SUBSTR(title, 1, 40) AS title, type, date_added FROM firefox.bookmarks ORDER BY date_added DESC LIMIT 3;"
+```
+```
++-----------------+--------+--------------------------+
+| title           | type   | date_added               |
++-----------------+--------+--------------------------+
+| Sony Blog       | url    | 2026-05-31T12:49:02.811Z |
+| Sony            | folder | 2026-05-31T12:49:02.811Z |
+| SonyStyle Store | url    | 2026-05-31T12:49:02.811Z |
++-----------------+--------+--------------------------+
+```
+
+**2. Absolute Top Sites**
+Top sites are ranked by Mozilla's frecency algorithm. To see the most visited sites first, sort by `url_rank` in ascending (`ASC`) order (where rank 1 is highest):
+
+```powershell
+coral sql "SELECT url_rank, SUBSTR(title, 1, 30) AS title, SUBSTR(url, 1, 40) AS url FROM firefox.top_sites ORDER BY url_rank ASC LIMIT 3;"
+```
+```
++----------+--------------------------------+------------------------------------------+
+| url_rank | title                          | url                                      |
++----------+--------------------------------+------------------------------------------+
+| 1        | Mozilla accounts               | https://accounts.firefox.com/settings    |
+| 2        | Inbox (78) - siddhant.shivam.m | https://gmail.com/                       |
+| 3        | Privacy Badger – Get this Exte | https://addons.mozilla.org/en-US/firefox |
++----------+--------------------------------+------------------------------------------+
+```
+
+**3. Installed Extensions (Alphabetical)**
+Since extensions don't have timestamps, you can sort them alphabetically by `name` using `ASC`:
+
+```powershell
+coral sql "SELECT SUBSTR(name, 1, 40) AS name, version FROM firefox.extensions ORDER BY name ASC LIMIT 3;"
+```
+```
++----------------------------------+---------+
+| name                             | version |
++----------------------------------+---------+
+| Add-ons Search Detection         | 3.0.0   |
+| Data Leak Blocker                | 144.0.0 |
+| Firefox Multi-Account Containers | 8.3.7   |
++----------------------------------+---------+
+```
+
+**4. Server-Side History Search**
+Use the `history_slice` function to push filters (like searching for 'mozilla' in the URL) directly to the local Python server:
+
+```powershell
+coral sql "SELECT SUBSTR(title, 1, 30) AS title, visit_count FROM firefox.history_slice(url => 'mozilla', limit => 3);"
+```
+```
++-----------------------------+-------------+
+| title                       | visit_count |
++-----------------------------+-------------+
+| Set up Firefox sync | Mozil | 1           |
+| Set up Firefox sync | Mozil | 1           |
+| Set up Firefox sync | Mozil | 1           |
++-----------------------------+-------------+
+```
+
+**5. SQL Aggregations**
+You can run standard SQL aggregations, such as counting how many bookmark folders you have versus actual saved URLs:
+
+```powershell
+coral sql "SELECT type, COUNT(*) AS total_count FROM firefox.bookmarks GROUP BY type LIMIT 3;"
+```
+```
++--------+-------------+
+| type   | total_count |
++--------+-------------+
+| folder | 12          |
+| url    | 60          |
++--------+-------------+
+```
+
 ### Step 7 – Stop the server when done
 
 Return to the first terminal and press **Ctrl+C**:

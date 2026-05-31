@@ -111,19 +111,14 @@ functions:
     description: "Fetch a deliberate server-side slice of Firefox history using optional limit, time range, URL substring, and title substring filters."
     args:
       - name: limit
-        type: Int64
         bind: { arg: limit }
       - name: after
-        type: Utf8
         bind: { arg: after }
       - name: before
-        type: Utf8
         bind: { arg: before }
       - name: url
-        type: Utf8
         bind: { arg: url }
       - name: title
-        type: Utf8
         bind: { arg: title }
     request:
       method: GET
