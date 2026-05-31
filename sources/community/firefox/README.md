@@ -138,13 +138,14 @@ On first run the server prints a generated bearer token:
 ```
 ============================================================
 No FIREFOX_API_KEY set. Generated a new token:
-  a3f8c1d2e4b5...  (64 hex characters)
+  <your-generated-64-character-token>
 
-Export this value before running `coral source add`:
-  export FIREFOX_API_KEY=a3f8c1d2e4b5...   # macOS/Linux
-  $env:FIREFOX_API_KEY="a3f8c1d2e4b5..."   # PowerShell
+Export this value before running `coral source add firefox`:
+  export FIREFOX_API_KEY=<your-generated-64-character-token>   # macOS/Linux
+  $env:FIREFOX_API_KEY="<your-generated-64-character-token>"  # PowerShell
 ============================================================
 Starting Firefox local server on http://127.0.0.1:8766
+Resolved profile via install default metadata: <path-to-your-firefox-profile>
 ```
 
 **Keep this terminal open.** The server must stay running while you query Coral.
@@ -198,7 +199,19 @@ coral source test firefox
 Expected output (abridged):
 
 ```
-✔ firefox  bookmarks  1 row
+  ✓ firefox connected successfully
+  Secrets: keychain
+
+    firefox (4 tables)
+    ├─ bookmarks
+    ├─ extensions
+    ├─ history
+    └─ top_sites
+    Query tests
+    1 declared · 1 passed · 0 failed
+
+    ✓ SELECT id, title FROM firefox.bookmarks LIMIT 1
+      1 row
 ```
 
 If the command reports an error, check that:
@@ -275,7 +288,7 @@ coral sql "SELECT url_rank, SUBSTR(title, 1, 30) AS title, SUBSTR(url, 1, 40) AS
 | url_rank | title                          | url                                      |
 +----------+--------------------------------+------------------------------------------+
 | 1        | Mozilla accounts               | https://accounts.firefox.com/settings    |
-| 2        | Inbox (78) - siddhant.shivam.m | https://gmail.com/                       |
+| 2        | Inbox (12) - example.user      | https://gmail.com/                       |
 | 3        | Privacy Badger – Get this Exte | https://addons.mozilla.org/en-US/firefox |
 +----------+--------------------------------+------------------------------------------+
 ```
