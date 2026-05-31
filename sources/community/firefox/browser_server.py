@@ -11,6 +11,7 @@ import configparser
 from datetime import datetime, timezone
 from urllib.parse import urlparse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from typing import Optional
 
 # ---------------------------------------------------------------------------
 # Auth token – read from env or generate a fresh one at startup.
@@ -23,6 +24,7 @@ _SERVER_TOKEN: str = os.environ.get("FIREFOX_API_KEY") or secrets.token_hex(32)
 PORT = 8766
 _HOST_HEADER = f"127.0.0.1:{PORT}"
 _ALLOWED_ORIGIN = f"http://127.0.0.1:{PORT}"
+_PROFILE_CACHE_TTL_SECONDS = 60
 
 # ---------------------------------------------------------------------------
 # PRTime helper
@@ -33,7 +35,7 @@ def convert_prtime(pr_time):
         return None
     try:
         dt = datetime.fromtimestamp(int(pr_time) / 1000000.0, tz=timezone.utc)
-        return dt.strftime("%Y-%m-%dT%H:%M:%S%z")
+        return dt.isoformat().replace("+00:00", "Z")
     except Exception:
         return str(pr_time)
 
@@ -42,9 +44,19 @@ def convert_prtime(pr_time):
 # ---------------------------------------------------------------------------
 
 def get_base_path():
-    env_base_path = os.environ.get("FIREFOX_PROFILES_PATH")
+    env_base_path = os.environ.get("FIREFOX_BASE_PATH") or os.environ.get("FIREFOX_PROFILES_PATH")
     if env_base_path:
-        return os.path.expanduser(env_base_path)
+        expanded = os.path.abspath(os.path.expanduser(env_base_path))
+        if os.path.exists(os.path.join(expanded, "profiles.ini")):
+            return expanded
+
+        parent = os.path.dirname(expanded)
+        if os.path.basename(expanded).lower() == "profiles" and os.path.exists(
+            os.path.join(parent, "profiles.ini")
+        ):
+            return parent
+
+        return expanded
 
     if sys.platform == "darwin":
         path = "~/Library/Application Support/Firefox"
@@ -55,87 +67,151 @@ def get_base_path():
     return os.path.expanduser(path)
 
 
+def _has_places_database(path: str) -> bool:
+    return os.path.exists(os.path.join(path, "places.sqlite"))
+
+
+def _read_ini(path: str):
+    if not os.path.exists(path):
+        return None
+
+    cfg = configparser.ConfigParser()
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            cfg.read_file(f)
+    except Exception as e:
+        print(f"Warning: could not parse {path}: {e}")
+        return None
+    return cfg
+
+
+def _profile_path_from_section(base_path: str, section: str, cfg: configparser.ConfigParser):
+    path_val = cfg.get(section, "Path", fallback=None)
+    if not path_val:
+        return None
+
+    is_relative = cfg.getboolean(section, "IsRelative", fallback=True)
+    candidate = os.path.join(base_path, path_val) if is_relative else path_val
+    return os.path.normpath(candidate)
+
+
+def _profile_path_from_install_default(
+    base_path: str,
+    default_path: str,
+    profile_cfg: configparser.ConfigParser,
+):
+    for section in profile_cfg.sections():
+        if not section.lower().startswith("profile"):
+            continue
+        section_path = profile_cfg.get(section, "Path", fallback=None)
+        if not section_path:
+            continue
+        if os.path.normcase(os.path.normpath(section_path)) == os.path.normcase(
+            os.path.normpath(default_path)
+        ):
+            return _profile_path_from_section(base_path, section, profile_cfg)
+
+    candidate = default_path if os.path.isabs(default_path) else os.path.join(base_path, default_path)
+    return os.path.normpath(candidate)
+
+
+def _collect_install_default_candidates(
+    base_path: str,
+    cfg: configparser.ConfigParser,
+    installs_cfg: Optional[configparser.ConfigParser],
+):
+    candidates = {}
+
+    def add_candidate(default_path: str):
+        candidate = _profile_path_from_install_default(base_path, default_path, cfg)
+        if _has_places_database(candidate):
+            candidates[os.path.normcase(os.path.normpath(candidate))] = candidate
+
+    for section in cfg.sections():
+        if section.startswith("Install"):
+            default_path = cfg.get(section, "Default", fallback=None)
+            if default_path:
+                add_candidate(default_path)
+
+    if installs_cfg:
+        for section in installs_cfg.sections():
+            default_path = installs_cfg.get(section, "Default", fallback=None)
+            if default_path:
+                add_candidate(default_path)
+
+    return list(candidates.values())
+
+
 def _resolve_from_ini(base_path: str):
     """Parse Firefox's profiles.ini to find the default profile.
 
     Resolution order:
-      1. [Install...] sections with a Default key
-      2. [Profile...] section with Default=1
-      3. None – caller must require FIREFOX_PROFILE_PATH
+      1. A single unambiguous [Install...] default profile
+      2. [Profile...] section with Default=1, only as a legacy fallback
+      3. None - caller must require FIREFOX_PROFILE_PATH
     """
-    profiles_ini = os.path.join(base_path, "profiles.ini")
-    if os.path.exists(profiles_ini):
-        cfg = configparser.ConfigParser()
-        try:
-            cfg.read(profiles_ini, encoding="utf-8")
-        except Exception as e:
-            print(f"Warning: could not parse profiles.ini: {e}")
-        else:
-            # First check [Install...] sections (modern per-install defaults).
-            for section in cfg.sections():
-                if section.startswith("Install"):
-                    default_path = cfg.get(section, "Default", fallback=None)
-                    if default_path:
-                        candidate = (
-                            default_path
-                            if os.path.isabs(default_path)
-                            else os.path.join(base_path, default_path)
-                        )
-                        candidate = os.path.normpath(candidate)
-                        if os.path.exists(os.path.join(candidate, "places.sqlite")):
-                            print(f"Resolved profile via profiles.ini [{section}]: {candidate}")
-                            return candidate
-                        print(
-                            f"profiles.ini [{section}] Default={default_path!r} "
-                            f"does not contain places.sqlite – skipping"
-                        )
+    cfg = _read_ini(os.path.join(base_path, "profiles.ini"))
+    if cfg:
+        # First check [Install...] sections (modern per-install defaults).
+        install_candidates = _collect_install_default_candidates(
+            base_path,
+            cfg,
+            _read_ini(os.path.join(base_path, "installs.ini")),
+        )
+        if len(install_candidates) == 1:
+            candidate = install_candidates[0]
+            print(f"Resolved profile via install default metadata: {candidate}")
+            return candidate, None
+        if len(install_candidates) > 1:
+            return None, (
+                "Multiple Firefox install defaults were found in profiles.ini/installs.ini. "
+                "Set FIREFOX_PROFILE_PATH to the profile directory you want Coral to use."
+            )
 
-            # Fallback to [Profile...] with Default=1 (older format).
-            for section in cfg.sections():
-                if not section.lower().startswith("profile"):
-                    continue
-                if cfg.get(section, "Default", fallback=None) != "1":
-                    continue
-                is_relative = cfg.getboolean(section, "IsRelative", fallback=True)
-                path_val = cfg.get(section, "Path", fallback=None)
-                if not path_val:
-                    continue
-                candidate = (
-                    os.path.join(base_path, path_val)
-                    if is_relative
-                    else path_val
-                )
-                candidate = os.path.normpath(candidate)
-                if os.path.exists(os.path.join(candidate, "places.sqlite")):
-                    print(f"Resolved profile via profiles.ini [{section}]: {candidate}")
-                    return candidate
-                print(
-                    f"profiles.ini [{section}] Path={path_val!r} does not contain places.sqlite – skipping"
-                )
+        # Fallback to [Profile...] with Default=1 (older format).
+        for section in cfg.sections():
+            if not section.lower().startswith("profile"):
+                continue
+            if cfg.get(section, "Default", fallback=None) != "1":
+                continue
+            candidate = _profile_path_from_section(base_path, section, cfg)
+            if not candidate:
+                continue
+            if _has_places_database(candidate):
+                print(f"Resolved profile via profiles.ini [{section}]: {candidate}")
+                return candidate, None
+            print(
+                f"profiles.ini [{section}] Path={cfg.get(section, 'Path', fallback='')!r} "
+                f"does not contain places.sqlite - skipping"
+            )
 
-    print(
+    return None, (
         "Could not resolve the Firefox default profile from profiles.ini. "
         "Set FIREFOX_PROFILE_PATH to a profile directory containing places.sqlite."
     )
-    return None
 
 
 def resolve_active_profile():
+    profile_path, error_message = _resolve_active_profile()
+    if error_message:
+        print(error_message)
+    return profile_path
+
+
+def _resolve_active_profile():
     # Highest priority: explicit env override
     env_profile_path = os.environ.get("FIREFOX_PROFILE_PATH")
     if env_profile_path:
-        profile_path = os.path.expanduser(env_profile_path)
+        profile_path = os.path.abspath(os.path.expanduser(env_profile_path))
         places_path = os.path.join(profile_path, "places.sqlite")
         if os.path.exists(places_path):
             print(f"Using Firefox profile from FIREFOX_PROFILE_PATH: {profile_path}")
-            return profile_path
-        print(f"FIREFOX_PROFILE_PATH does not contain places.sqlite: {profile_path}")
-        return None
+            return profile_path, None
+        return None, f"FIREFOX_PROFILE_PATH does not contain places.sqlite: {profile_path}"
 
     base_path = get_base_path()
     if not os.path.exists(base_path):
-        print(f"Firefox base path not found: {base_path}")
-        return None
+        return None, f"Firefox base path not found: {base_path}"
 
     # Try profiles.ini first; otherwise require an explicit override.
     return _resolve_from_ini(base_path)
@@ -183,14 +259,17 @@ def query_sqlite(db_name, profile_path, query):
 
 def extract_bookmarks(profile_path):
     q = """
-    SELECT b.id, b.title, p.url, b.dateAdded as date_added, b.type
+    SELECT b.id, b.guid, b.parent as parent_id, b.position,
+           b.title, p.url, b.dateAdded as date_added,
+           b.lastModified as last_modified, b.type
     FROM moz_bookmarks b
     LEFT JOIN moz_places p ON b.fk = p.id
-    WHERE b.title IS NOT NULL AND b.title != ''
+    WHERE b.type IN (1, 2) AND b.title IS NOT NULL AND b.title != ''
     """
     results = query_sqlite("places.sqlite", profile_path, q)
     for r in results:
         r["date_added"] = convert_prtime(r["date_added"])
+        r["last_modified"] = convert_prtime(r["last_modified"])
         r["type"] = "folder" if r["type"] == 2 else "url"
     return results
 
@@ -243,16 +322,23 @@ def extract_extensions(profile_path):
 
 _UNSET = object()
 _cached_profile = _UNSET
+_cached_profile_error = None
 _cache_time = 0.0
 
 
 def get_active_profile():
-    global _cached_profile, _cache_time
+    global _cached_profile, _cached_profile_error, _cache_time
     now = time.time()
-    if _cached_profile is _UNSET or (now - _cache_time > 60):
-        _cached_profile = resolve_active_profile()
+    if _cached_profile is _UNSET or (now - _cache_time > _PROFILE_CACHE_TTL_SECONDS):
+        _cached_profile, _cached_profile_error = _resolve_active_profile()
+        if _cached_profile_error:
+            print(_cached_profile_error)
         _cache_time = now
     return _cached_profile
+
+
+def get_active_profile_error():
+    return _cached_profile_error
 
 # ---------------------------------------------------------------------------
 # HTTP handler
@@ -325,11 +411,14 @@ class BrowserAPIHandler(BaseHTTPRequestHandler):
             profile_path = get_active_profile()
 
             if not profile_path:
-                self._send_error(
-                    503,
+                error_message = get_active_profile_error() or (
                     "No Firefox profile found. "
                     "Set FIREFOX_PROFILE_PATH to a profile directory "
                     "containing places.sqlite."
+                )
+                self._send_error(
+                    503,
+                    error_message,
                 )
                 return
 
@@ -360,9 +449,10 @@ class BrowserAPIHandler(BaseHTTPRequestHandler):
     # ------------------------------------------------------------------
 
     def _send_json(self, status: int, payload: dict):
-        body = json.dumps(payload).encode("utf-8")
+        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         self.send_response(status)
-        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
         self.send_header("X-Content-Type-Options", "nosniff")
         self.end_headers()
@@ -391,6 +481,7 @@ if __name__ == "__main__":
     else:
         print("Using FIREFOX_API_KEY from environment.")
 
+    ThreadingHTTPServer.allow_reuse_address = True
     server = ThreadingHTTPServer(("127.0.0.1", PORT), BrowserAPIHandler)
     print(f"Starting Firefox local server on http://127.0.0.1:{PORT}")
     try:

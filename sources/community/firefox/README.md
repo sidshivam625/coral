@@ -32,8 +32,9 @@ computer.
 * **Security headers:** All responses include `Cache-Control: no-store` and
   `X-Content-Type-Options: nosniff`.
 * **Accurate profile resolution:** Reads Firefox's `profiles.ini` metadata to
-  find the correct install or default profile, instead of guessing by
-  file-modification time.
+  use a single unambiguous install default when one exists, falls back to the
+  legacy `[Profile...] Default=1` entry, and refuses to guess when multiple
+  Firefox installations advertise different defaults.
 * **Explicit profile override:** Set `FIREFOX_PROFILE_PATH` to pin the server
   to one specific profile directory.
 * **Safe SQLite extraction:** Copies `places.sqlite` together with its WAL and
@@ -65,6 +66,11 @@ zero-dependency requirement, as Mozilla uses a proprietary `jsonlz4` format.*
 
 If you have multiple Firefox profiles and want to pin the server to a specific
 one, find the profile directory that contains `places.sqlite`:
+
+If you have multiple Firefox installations, set `FIREFOX_PROFILE_PATH` to the
+exact profile directory instead of relying on automatic discovery. The server
+now requires that override when `profiles.ini` exposes more than one distinct
+install-scoped default.
 
 ```
 # macOS
@@ -98,7 +104,7 @@ On first run the server prints a generated bearer token:
 ```
 ============================================================
 No FIREFOX_API_KEY set. Generated a new token:
-  a3f8c1d2e4b5...  (32 hex characters)
+  a3f8c1d2e4b5...  (64 hex characters)
 
 Export this value before running `coral source add`:
   export FIREFOX_API_KEY=a3f8c1d2e4b5...   # macOS/Linux
@@ -154,8 +160,9 @@ If the command reports an error, check that:
   value printed by the server (Step 3).
 - The profile path contains `places.sqlite`.
 
-If Firefox profile metadata cannot be resolved or `places.sqlite` is missing,
-`coral source test firefox` now fails instead of returning an empty success.
+If Firefox profile metadata cannot be resolved, is ambiguous, or `places.sqlite`
+is missing, `coral source test firefox` fails with a clear error instead of
+returning an empty success.
 
 ### Step 6 – Run a representative query
 
@@ -192,7 +199,8 @@ Shutting down server.
 |----------|-------------|
 | `FIREFOX_API_KEY` | Bearer token for the local HTTP server. If unset, a random token is generated at startup and printed to stdout. |
 | `FIREFOX_PROFILE_PATH` | Full path to a specific Firefox profile directory (must contain `places.sqlite`). Overrides automatic profile detection. |
-| `FIREFOX_PROFILES_PATH` | Full path to the Firefox `Profiles` root directory. Overrides the platform default used by the `profiles.ini` scanner. |
+| `FIREFOX_BASE_PATH` | Full path to the Firefox configuration directory that contains `profiles.ini`. Overrides the platform default used by the profile scanner. |
+| `FIREFOX_PROFILES_PATH` | Backward-compatible alias for `FIREFOX_BASE_PATH`. If you point it at a `Profiles` directory whose parent contains `profiles.ini`, the server automatically uses that parent directory. |
 
 ---
 

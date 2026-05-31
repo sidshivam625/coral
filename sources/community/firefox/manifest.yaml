@@ -31,10 +31,30 @@ tables:
     fetch_limit_default: 500
     columns:
       - { name: id, type: Int64, nullable: false }
+      - { name: guid, type: Utf8, nullable: false }
+      - { name: parent_id, type: Int64, nullable: false }
+      - { name: position, type: Int64, nullable: false }
       - { name: title, type: Utf8, nullable: true }
       - { name: url, type: Utf8, nullable: true }
       - { name: type, type: Utf8, nullable: false }
-      - { name: date_added, type: Timestamp, nullable: true, format_timestamp: "%Y-%m-%dT%H:%M:%S%z" }
+      - name: date_added
+        type: Timestamp
+        nullable: true
+        expr:
+          kind: format_timestamp
+          input: iso8601
+          expr:
+            kind: path
+            path: [date_added]
+      - name: last_modified
+        type: Timestamp
+        nullable: true
+        expr:
+          kind: format_timestamp
+          input: iso8601
+          expr:
+            kind: path
+            path: [last_modified]
 
   - name: history
     description: "Lists Firefox browsing history records."
@@ -47,7 +67,15 @@ tables:
       - { name: url, type: Utf8, nullable: false }
       - { name: title, type: Utf8, nullable: true }
       - { name: visit_count, type: Int64, nullable: false }
-      - { name: last_visit_date, type: Timestamp, nullable: true, format_timestamp: "%Y-%m-%dT%H:%M:%S%z" }
+      - name: last_visit_date
+        type: Timestamp
+        nullable: true
+        expr:
+          kind: format_timestamp
+          input: iso8601
+          expr:
+            kind: path
+            path: [last_visit_date]
 
   - name: extensions
     description: "Lists installed Firefox extensions."
