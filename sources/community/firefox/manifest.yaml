@@ -5,6 +5,13 @@ backend: http
 description: >-
   Query local bookmarks, history, extensions, and top sites for Mozilla Firefox.
 inputs:
+  FIREFOX_BASE_URL:
+    kind: variable
+    default: http://127.0.0.1:8766
+    hint: |
+      Base URL for the local Firefox server. If you start browser_server.py
+      with FIREFOX_PORT=8767, set this to http://127.0.0.1:8767 before
+      running coral source add.
   FIREFOX_API_KEY:
     kind: secret
     hint: |
@@ -12,7 +19,7 @@ inputs:
       environment variable before starting browser_server.py to define your own
       token, or copy the token printed to the console when the server starts
       without that variable set.
-base_url: "http://127.0.0.1:8766"
+base_url: "{{input.FIREFOX_BASE_URL}}"
 auth:
   type: HeaderAuth
   headers:
@@ -33,7 +40,7 @@ tables:
       - { name: id, type: Int64, nullable: false }
       - { name: guid, type: Utf8, nullable: false }
       - { name: parent_id, type: Int64, nullable: false }
-      - { name: position, type: Int64, nullable: false }
+      - { name: position, type: Int64, nullable: true }
       - { name: title, type: Utf8, nullable: true }
       - { name: url, type: Utf8, nullable: true }
       - { name: type, type: Utf8, nullable: false }
@@ -57,11 +64,11 @@ tables:
             path: [last_modified]
 
   - name: history
-    description: "Lists Firefox browsing history records."
+    description: "Recent Firefox browsing history sample, newest first. This table is capped at 5,000 server-side rows; use firefox.history_slice(...) for a deliberate filtered slice."
     request: { method: GET, path: /firefox/history }
     response: { rows_path: [data] }
     pagination: { mode: none }
-    fetch_limit_default: 500
+    fetch_limit_default: 5000
     columns:
       - { name: id, type: Int64, nullable: false }
       - { name: url, type: Utf8, nullable: false }
@@ -89,12 +96,57 @@ tables:
       - { name: version, type: Utf8, nullable: true }
 
   - name: top_sites
-    description: "Lists the most frequently visited Firefox websites ranked by frecency."
+    description: "Lists the top 100 most frequently visited Firefox websites ranked by frecency."
     request: { method: GET, path: /firefox/top_sites }
     response: { rows_path: [data] }
     pagination: { mode: none }
-    fetch_limit_default: 500
+    fetch_limit_default: 100
     columns:
       - { name: url_rank, type: Int64, nullable: false }
       - { name: url, type: Utf8, nullable: false }
       - { name: title, type: Utf8, nullable: true }
+
+functions:
+  - name: history_slice
+    description: "Fetch a deliberate server-side slice of Firefox history using optional limit, time range, URL substring, and title substring filters."
+    args:
+      - name: limit
+        type: Int64
+        bind: { arg: limit }
+      - name: after
+        type: Utf8
+        bind: { arg: after }
+      - name: before
+        type: Utf8
+        bind: { arg: before }
+      - name: url
+        type: Utf8
+        bind: { arg: url }
+      - name: title
+        type: Utf8
+        bind: { arg: title }
+    request:
+      method: GET
+      path: /firefox/history_slice
+      query:
+        - { name: limit, from: arg, key: limit }
+        - { name: after, from: arg, key: after }
+        - { name: before, from: arg, key: before }
+        - { name: url, from: arg, key: url }
+        - { name: title, from: arg, key: title }
+    response: { rows_path: [data] }
+    pagination: { mode: none }
+    columns:
+      - { name: id, type: Int64, nullable: false }
+      - { name: url, type: Utf8, nullable: false }
+      - { name: title, type: Utf8, nullable: true }
+      - { name: visit_count, type: Int64, nullable: false }
+      - name: last_visit_date
+        type: Timestamp
+        nullable: true
+        expr:
+          kind: format_timestamp
+          input: iso8601
+          expr:
+            kind: path
+            path: [last_visit_date]

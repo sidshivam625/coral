@@ -9,7 +9,8 @@ import tempfile
 import time
 import configparser
 from datetime import datetime, timezone
-from urllib.parse import urlparse
+from pathlib import Path
+from urllib.parse import parse_qs, urlparse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Optional
 
@@ -21,10 +22,50 @@ from typing import Optional
 # ---------------------------------------------------------------------------
 _SERVER_TOKEN: str = os.environ.get("FIREFOX_API_KEY") or secrets.token_hex(32)
 
-PORT = 8766
-_HOST_HEADER = f"127.0.0.1:{PORT}"
-_ALLOWED_ORIGIN = f"http://127.0.0.1:{PORT}"
 _PROFILE_CACHE_TTL_SECONDS = 60
+_DEFAULT_PORT = 8766
+_MAX_HISTORY_LIMIT = 5000
+
+
+def _read_server_config():
+    base_url = os.environ.get("FIREFOX_BASE_URL")
+    port_text = os.environ.get("FIREFOX_PORT", str(_DEFAULT_PORT))
+
+    if base_url:
+        base_url = base_url.rstrip("/")
+        parsed = urlparse(base_url)
+        if parsed.scheme != "http" or parsed.hostname not in {"127.0.0.1", "localhost"}:
+            raise ValueError("FIREFOX_BASE_URL must be http://127.0.0.1:<port> or http://localhost:<port>.")
+        if parsed.port is None:
+            raise ValueError("FIREFOX_BASE_URL must include an explicit port.")
+        port = parsed.port
+        if port < 1 or port > 65535:
+            raise ValueError("FIREFOX_BASE_URL port must be between 1 and 65535.")
+        if parsed.path not in {"", "/"}:
+            raise ValueError("FIREFOX_BASE_URL must not include a path.")
+        if parsed.params or parsed.query or parsed.fragment:
+            raise ValueError("FIREFOX_BASE_URL must not include params, query, or fragment.")
+        host_header = f"{parsed.hostname}:{port}"
+        normalized_base_url = f"{parsed.scheme}://{host_header}"
+        return port, parsed.hostname.lower(), host_header, normalized_base_url, normalized_base_url
+
+    try:
+        port = int(port_text)
+    except ValueError as exc:
+        raise ValueError("FIREFOX_PORT must be an integer.") from exc
+
+    if port < 1 or port > 65535:
+        raise ValueError("FIREFOX_PORT must be between 1 and 65535.")
+
+    base_url = f"http://127.0.0.1:{port}"
+    return port, "127.0.0.1", f"127.0.0.1:{port}", base_url, base_url
+
+
+try:
+    PORT, _BIND_HOST, _HOST_HEADER, _ALLOWED_ORIGIN, _BASE_URL = _read_server_config()
+except ValueError as exc:
+    print(f"Firefox source configuration error: {exc}", file=sys.stderr)
+    sys.exit(2)
 
 # ---------------------------------------------------------------------------
 # PRTime helper
@@ -220,7 +261,7 @@ def _resolve_active_profile():
 # SQLite helpers
 # ---------------------------------------------------------------------------
 
-def query_sqlite(db_name, profile_path, query):
+def query_sqlite(db_name, profile_path, query, params=()):
     original_path = os.path.join(profile_path, db_name)
     if not os.path.exists(original_path):
         raise FileNotFoundError(
@@ -231,26 +272,46 @@ def query_sqlite(db_name, profile_path, query):
     temp_dir = tempfile.mkdtemp()
     temp_path = os.path.join(temp_dir, db_name)
 
-    for ext in ["", "-wal", "-shm"]:
-        src = original_path + ext
-        if os.path.exists(src):
-            shutil.copy2(src, temp_path + ext)
-
     results = []
+    source_conn = None
     conn = None
     try:
+        source_uri = Path(original_path).resolve().as_uri() + "?mode=ro"
+        source_conn = sqlite3.connect(source_uri, uri=True)
+        conn = sqlite3.connect(temp_path)
+        source_conn.backup(conn)
+        source_conn.close()
+        source_conn = None
+        conn.close()
+        conn = None
+
         conn = sqlite3.connect(temp_path)
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
-        cursor.execute(query)
+        cursor.execute(query, params)
         for row in cursor.fetchall():
             results.append(dict(row))
+    except PermissionError as e:
+        raise RuntimeError(
+            f"Cannot read {db_name}: the file is locked. "
+            "On Windows, close Firefox before querying Coral."
+        ) from e
+    except sqlite3.OperationalError as e:
+        message = str(e).lower()
+        if "locked" in message or "access" in message or "readonly" in message:
+            raise RuntimeError(
+                f"Cannot read {db_name}: the file is locked or unavailable. "
+                "On Windows, close Firefox before querying Coral."
+            ) from e
+        raise RuntimeError(f"SQLite error reading {db_name}: {e}") from e
     except Exception as e:
         raise RuntimeError(f"SQLite error reading {db_name}: {e}") from e
     finally:
+        if source_conn:
+            source_conn.close()
         if conn:
             conn.close()
-        shutil.rmtree(temp_dir)
+        shutil.rmtree(temp_dir, ignore_errors=True)
     return results
 
 # ---------------------------------------------------------------------------
@@ -274,13 +335,80 @@ def extract_bookmarks(profile_path):
     return results
 
 
-def extract_history(profile_path):
+def _first_query_value(query_params, key):
+    values = query_params.get(key) if query_params else None
+    if not values:
+        return None
+    value = values[0]
+    if value == "":
+        return None
+    return value
+
+
+def _parse_limit(value, default):
+    if value is None:
+        return default
+    try:
+        limit = int(value)
+    except ValueError as exc:
+        raise ValueError("history limit must be an integer.") from exc
+    if limit < 1 or limit > _MAX_HISTORY_LIMIT:
+        raise ValueError(f"history limit must be between 1 and {_MAX_HISTORY_LIMIT}.")
+    return limit
+
+
+def _parse_history_time(value, key):
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except ValueError:
+        pass
+
+    try:
+        dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise ValueError(f"{key} must be an ISO 8601 timestamp or Firefox PRTime microseconds.") from exc
+
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return int(dt.timestamp() * 1000000)
+
+
+def _like_pattern(value):
+    escaped = value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return f"%{escaped}%"
+
+
+def extract_history(profile_path, query_params=None):
+    limit = _parse_limit(_first_query_value(query_params, "limit"), _MAX_HISTORY_LIMIT)
+    after = _parse_history_time(_first_query_value(query_params, "after"), "after")
+    before = _parse_history_time(_first_query_value(query_params, "before"), "before")
+    url = _first_query_value(query_params, "url")
+    title = _first_query_value(query_params, "title")
+
+    where = ["visit_count > 0"]
+    params = []
+    if after is not None:
+        where.append("last_visit_date >= ?")
+        params.append(after)
+    if before is not None:
+        where.append("last_visit_date <= ?")
+        params.append(before)
+    if url is not None:
+        where.append("url LIKE ? ESCAPE '\\'")
+        params.append(_like_pattern(url))
+    if title is not None:
+        where.append("title LIKE ? ESCAPE '\\'")
+        params.append(_like_pattern(title))
+
+    params.append(limit)
     q = (
         "SELECT id, url, title, visit_count, last_visit_date "
-        "FROM moz_places WHERE visit_count > 0 "
-        "ORDER BY last_visit_date DESC LIMIT 5000"
+        f"FROM moz_places WHERE {' AND '.join(where)} "
+        "ORDER BY last_visit_date DESC LIMIT ?"
     )
-    results = query_sqlite("places.sqlite", profile_path, q)
+    results = query_sqlite("places.sqlite", profile_path, q, params)
     for r in results:
         r["last_visit_date"] = convert_prtime(r["last_visit_date"])
     return results
@@ -306,14 +434,17 @@ def extract_extensions(profile_path):
 
         for addon in data.get("addons", []):
             if addon.get("type") == "extension":
+                addon_id = addon.get("id", "")
+                if not addon_id:
+                    continue
                 name = addon.get("defaultLocale", {}).get("name") or addon.get("name", "")
                 results.append({
-                    "id": addon.get("id", ""),
+                    "id": addon_id,
                     "name": name,
                     "version": addon.get("version", "")
                 })
     except Exception as e:
-        print(f"Error parsing extensions: {e}")
+        raise RuntimeError(f"Error parsing extensions.json: {e}") from e
     return results
 
 # ---------------------------------------------------------------------------
@@ -356,7 +487,7 @@ class BrowserAPIHandler(BaseHTTPRequestHandler):
         """
         # 1. Host header – block DNS-rebinding attacks
         host = self.headers.get("Host", "")
-        if host != _HOST_HEADER:
+        if host.lower() != _HOST_HEADER.lower():
             self._send_error(400, "Invalid Host header.")
             return False
 
@@ -403,8 +534,8 @@ class BrowserAPIHandler(BaseHTTPRequestHandler):
         if not self._check_security():
             return
 
-        parsed_path = urlparse(self.path).path
-        path_parts = parsed_path.strip("/").split("/")
+        parsed_url = urlparse(self.path)
+        path_parts = parsed_url.path.strip("/").split("/")
 
         if len(path_parts) == 2 and path_parts[0] == "firefox":
             data_type = path_parts[1]
@@ -425,13 +556,20 @@ class BrowserAPIHandler(BaseHTTPRequestHandler):
             funcs = {
                 "bookmarks": extract_bookmarks,
                 "history": extract_history,
+                "history_slice": extract_history,
                 "top_sites": extract_top_sites,
                 "extensions": extract_extensions,
             }
 
             if data_type in funcs:
                 try:
-                    data = funcs[data_type](profile_path)
+                    if data_type in {"history", "history_slice"}:
+                        data = funcs[data_type](profile_path, parse_qs(parsed_url.query))
+                    else:
+                        data = funcs[data_type](profile_path)
+                except ValueError as exc:
+                    self._send_error(400, str(exc))
+                    return
                 except FileNotFoundError as exc:
                     self._send_error(503, str(exc))
                     return
@@ -482,8 +620,8 @@ if __name__ == "__main__":
         print("Using FIREFOX_API_KEY from environment.")
 
     ThreadingHTTPServer.allow_reuse_address = True
-    server = ThreadingHTTPServer(("127.0.0.1", PORT), BrowserAPIHandler)
-    print(f"Starting Firefox local server on http://127.0.0.1:{PORT}")
+    server = ThreadingHTTPServer((_BIND_HOST, PORT), BrowserAPIHandler)
+    print(f"Starting Firefox local server on {_BASE_URL}")
     try:
         server.serve_forever()
     except KeyboardInterrupt:

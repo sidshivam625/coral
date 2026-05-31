@@ -11,12 +11,14 @@ read the data.
 > **⚠️ Local data exposure risk**
 > The server makes your Firefox bookmarks, browsing history, and installed
 > extensions readable to any process on your machine that holds the bearer
-> token.  Start the server only when you intend to query Coral, and stop it
-> immediately afterwards with **Ctrl+C**.  Never expose port `8766` beyond
-> `127.0.0.1`.
+> token. Query results are returned to the local Coral client, MCP server, or
+> agent that asks for them, and may appear in transcripts or logs managed by
+> those tools. Start the server only when you intend to query Coral, and stop it
+> afterwards with **Ctrl+C**. Never expose the configured port beyond
+> `127.0.0.1` or `localhost`.
 
-All processing happens entirely on your machine. No data ever leaves your
-computer.
+The Python server itself does not upload Firefox data. Treat anything returned
+to Coral as data shared with the local Coral workflow that requested it.
 
 ---
 
@@ -37,12 +39,12 @@ computer.
   Firefox installations advertise different defaults.
 * **Explicit profile override:** Set `FIREFOX_PROFILE_PATH` to pin the server
   to one specific profile directory.
-* **Safe SQLite extraction:** Copies `places.sqlite` together with its WAL and
-  SHM sidecar files so reads are safe while Firefox is running.
+* **Safe SQLite extraction:** Uses SQLite's backup API to create a consistent
+  temporary snapshot before querying `places.sqlite`.
 * **Zero dependencies:** Only standard Python libraries – no `pip install`
   required.
-* **Port isolation:** Runs on port `8766` to allow concurrent use with the
-  Chromium source server.
+* **Configurable loopback port:** Runs on port `8766` by default. Set
+  `FIREFOX_PORT` and matching `FIREFOX_BASE_URL` if that port is occupied.
 
 ---
 
@@ -51,9 +53,10 @@ computer.
 | Table | Description |
 |-------|-------------|
 | `bookmarks` | Saved URLs and folder structures from `moz_bookmarks` |
-| `history` | Browsing history from `moz_places` (timestamps as ISO 8601 UTC) |
+| `history` | Recent browsing history sample from `moz_places`, newest first, capped at 5,000 server-side rows |
+| `history_slice(...)` | Parameterized history function for deliberate server-side slices by limit, time range, URL substring, or title substring |
 | `extensions` | Installed extensions and versions from `extensions.json` |
-| `top_sites` | Most-visited sites ranked by Mozilla's `frecency` algorithm |
+| `top_sites` | Top 100 sites ranked by Mozilla's `frecency` algorithm |
 
 *Note: Session-restore (tabs) parsing is intentionally omitted to preserve the
 zero-dependency requirement, as Mozilla uses a proprietary `jsonlz4` format.*
@@ -88,15 +91,46 @@ Note the full path to the profile you want (e.g.
 
 ### Step 2 – Start the local browser server
 
-Open a **dedicated terminal** and run:
+Keep the full `sources/community/firefox/` directory available locally. Coral
+installs the manifest, but it does not package, copy, or supervise
+`browser_server.py`; you must start this server yourself before each query
+session and keep it running while Coral queries.
+
+Open a **dedicated terminal** and run from the `sources/community/firefox`
+directory:
 
 ```bash
+# Requires Python 3.8 or later.
+
 # Pin to a specific profile (recommended if you have more than one):
 export FIREFOX_PROFILE_PATH="~/.mozilla/firefox/abc123.default-release"
-# Windows PowerShell:
-# $env:FIREFOX_PROFILE_PATH = "$env:APPDATA\Mozilla\Firefox\Profiles\abc123.default-release"
+python3 browser_server.py
+```
 
-python sources/community/firefox/browser_server.py
+On Windows PowerShell:
+
+```powershell
+$env:FIREFOX_PROFILE_PATH = "$env:APPDATA\Mozilla\Firefox\Profiles\abc123.default-release"
+py -3 browser_server.py
+```
+
+If Firefox keeps `places.sqlite` locked on Windows, close Firefox before
+querying Coral.
+
+If port `8766` is already in use, choose another loopback port and keep the
+server and manifest configuration in sync:
+
+```bash
+# macOS / Linux
+export FIREFOX_PORT=8767
+export FIREFOX_BASE_URL=http://127.0.0.1:8767
+python3 browser_server.py
+```
+
+```powershell
+$env:FIREFOX_PORT = "8767"
+$env:FIREFOX_BASE_URL = "http://127.0.0.1:8767"
+py -3 browser_server.py
 ```
 
 On first run the server prints a generated bearer token:
@@ -118,14 +152,19 @@ Starting Firefox local server on http://127.0.0.1:8766
 ### Step 3 – Export the bearer token
 
 In a **second terminal**, export the token printed in Step 2 so that
-`coral source add` can forward it in the manifest:
+`coral source add` can forward it in the manifest. If you changed the port,
+export the same `FIREFOX_BASE_URL` here too:
 
 ```bash
 # macOS / Linux
 export FIREFOX_API_KEY=a3f8c1d2e4b5...
+# Only needed when not using the default port:
+export FIREFOX_BASE_URL=http://127.0.0.1:8767
 
 # Windows PowerShell
 $env:FIREFOX_API_KEY="a3f8c1d2e4b5..."
+# Only needed when not using the default port:
+$env:FIREFOX_BASE_URL="http://127.0.0.1:8767"
 ```
 
 > **Tip:** To avoid retyping the token on every server restart, set
@@ -133,14 +172,22 @@ $env:FIREFOX_API_KEY="a3f8c1d2e4b5..."
 > `~/.zshrc`) **and** export it before starting the server:
 > ```bash
 > export FIREFOX_API_KEY="my-fixed-secret-value"
-> python sources/community/firefox/browser_server.py
+> python3 browser_server.py
 > ```
 
 ### Step 4 – Add the source to Coral
 
 ```bash
+# From the sources/community/firefox/ directory:
+coral source add --file ./manifest.yaml
+
+# Or, from the repository root:
 coral source add --file ./sources/community/firefox/manifest.yaml
 ```
+
+This command registers the manifest and stores the input values. It does not
+install or start `browser_server.py`; leave the Step 2 terminal running for
+tests and queries.
 
 ### Step 5 – Verify the source
 
@@ -158,7 +205,11 @@ If the command reports an error, check that:
 - The server is still running (Step 2 terminal).
 - `FIREFOX_API_KEY` is exported in **this** terminal and matches the
   value printed by the server (Step 3).
+- If you changed ports, `FIREFOX_BASE_URL` was exported before running
+  `coral source add` and matches the running server.
 - The profile path contains `places.sqlite`.
+- On Windows, close Firefox if the server reports that `places.sqlite` is
+  locked or unavailable.
 
 If Firefox profile metadata cannot be resolved, is ambiguous, or `places.sqlite`
 is missing, `coral source test firefox` fails with a clear error instead of
@@ -167,11 +218,22 @@ returning an empty success.
 ### Step 6 – Run a representative query
 
 ```sql
--- 10 most recently visited URLs
+-- 10 most recently visited URLs from the bounded recent-history table
 SELECT title, url, last_visit_date
 FROM firefox.history
 ORDER BY last_visit_date DESC
 LIMIT 10;
+```
+
+```sql
+-- A deliberate server-side slice by timestamp and URL substring
+SELECT title, url, visit_count, last_visit_date
+FROM firefox.history_slice(
+  limit => 1000,
+  after => '2026-01-01T00:00:00Z',
+  url => 'mozilla'
+)
+ORDER BY last_visit_date DESC;
 ```
 
 ```sql
@@ -198,6 +260,8 @@ Shutting down server.
 | Variable | Description |
 |----------|-------------|
 | `FIREFOX_API_KEY` | Bearer token for the local HTTP server. If unset, a random token is generated at startup and printed to stdout. |
+| `FIREFOX_PORT` | Loopback port for `browser_server.py`. Defaults to `8766`. If changed, set `FIREFOX_BASE_URL` to the same port before `coral source add`. |
+| `FIREFOX_BASE_URL` | Base URL for both the server's Host/Origin checks and the Coral manifest input, e.g. `http://127.0.0.1:8767`. Must include an explicit port. Defaults to `http://127.0.0.1:8766`. |
 | `FIREFOX_PROFILE_PATH` | Full path to a specific Firefox profile directory (must contain `places.sqlite`). Overrides automatic profile detection. |
 | `FIREFOX_BASE_PATH` | Full path to the Firefox configuration directory that contains `profiles.ini`. Overrides the platform default used by the profile scanner. |
 | `FIREFOX_PROFILES_PATH` | Backward-compatible alias for `FIREFOX_BASE_PATH`. If you point it at a `Profiles` directory whose parent contains `profiles.ini`, the server automatically uses that parent directory. |
